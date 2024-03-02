@@ -1,0 +1,52 @@
+name: Mirror
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+env:
+  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  UPSTREAM_REPO: https://github.com/fractalnetworksco/selfhosted-gateway.git
+  
+jobs:
+  pull_upstream:
+    runs-on: ubuntu-latest
+    steps:
+      # https://github.com/orgs/community/discussions/35410
+      - name: Checkout downstream
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEFAULT_BRANCH }}
+          token: ${{ secrets.WORKFLOW_TOKEN }}
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream
+
+      - name: Update upstream mirror
+        run: |
+          git checkout -b temp "upstream/${DEFAULT_BRANCH}"
+          git push origin "temp:upstream/${DEFAULT_BRANCH}"
+
+  push_downstream:
+    runs-on: ubuntu-latest
+    needs: pull_upstream
+    steps:
+      - name: Checkout downstream
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEFAULT_BRANCH }}
+          token: ${{ secrets.WORKFLOW_TOKEN }}
+          fetch-depth: 0  # fetch all history for all branches
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Ryan Persée"
+          git config user.email "98691129+rpersee@users.noreply.github.com"
+
+      - name: Rebase downstream
+        run: |
+          git rebase "origin/upstream/${DEFAULT_BRANCH}"
+          git push --force-with-lease
