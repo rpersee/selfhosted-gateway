@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "selfhostedGateway.fullname" . }}
+  labels:
+    {{- include "selfhostedGateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ ternary 1 0 .Values.enabled }}
+  selector:
+    matchLabels:
+      {{- include "selfhostedGateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "selfhostedGateway.labels" . | nindent 8 }}
+	{{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: link-config
+          emptyDir: {}
+        - name: ssh-config
+          configMap:
+            name: {{ .Release.Name }}-ssh
+        - name: ssh-identity
+          secret:
+            secretName: {{ .Values.gateway.sshIdentity.secretName }}
+            items:
+              - key: {{ .Values.gateway.sshIdentity.secretKey }}
+                path: private_key
+            defaultMode: 0400
+      initContainers:
+        - name: {{ .Chart.Name }}-init
+          securityContext:
+            {{- toYaml .Values.createLink.securityContext | nindent 12 }}
+          image: "{{ .Values.createLink.image.repository }}:{{ .Values.createLink.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.createLink.image.pullPolicy }}
+          args:
+            - "gateway"  # defined in ssh configmap
+            - "{{ .Values.expose.hostFqdn }}"
+          {{- with .Values.expose.service }}
+            - "{{ .name }}.{{ .namespace }}.svc:{{ .port }}"
+          {{- end }}
+          resources:
+            {{- toYaml .Values.createLink.resources | nindent 12 }}
+          volumeMounts:
+            - name: link-config
+              mountPath: /workdir
+            - name: ssh-config
+              mountPath: /etc/ssh/ssh_config.d/gateway.conf
+              subPath: ssh_config
+            - name: ssh-identity
+              mountPath: /etc/ssh/ssh_identity
+              subPath: private_key
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.clientLink.securityContext | nindent 12 }}
+          image: "{{ .Values.clientLink.image.repository }}:{{ .Values.clientLink.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.clientLink.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - >-
+              export $(cat /etc/selfhosted-gateway/*.env | xargs);
+              export GATEWAY_CLIENT_WG_PRIVKEY="${WG_PRIVKEY}"; 
+              entrypoint.sh
+          resources:
+            {{- toYaml .Values.clientLink.resources | nindent 12 }}
+          volumeMounts:
+            - name: link-config
+              mountPath: /etc/selfhosted-gateway
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,59 @@
+# Default values for selfhosted-gateway.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+enabled: true
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+expose:
+  hostFqdn: ""
+
+  service:
+    name: ""
+    namespace: ""
+    port: 80
+
+gateway:
+  host: ""
+  user: ""
+
+  sshIdentity:
+    secretName: ""
+    secretKey: ""
+
+createLink:
+  image: &image
+    repository: ghcr.io/rpersee/gateway-cli
+    pullPolicy: Always
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+
+  securityContext: {}
+
+  resources: {}
+
+clientLink:
+  image:
+    <<: *image
+    repository: ghcr.io/rpersee/gateway-client
+
+  securityContext:
+    capabilities:
+      add:
+      - NET_ADMIN
+
+  resources: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

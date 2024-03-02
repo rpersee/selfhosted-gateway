@@ -1,0 +1,21 @@
+apiVersion: v2
+name: selfhosted-gateway
+description: Route HTTPS traffic to a Kubernetes service through a cloud VPS over WireGuard
+
+version: 0.1.0
+
+appVersion: "latest"
+
+keywords:
+  - selfhosted
+  - reverse-proxy
+  - wireguard
+
+home: https://www.fractalnetworks.co/
+
+sources:
+  - https://github.com/rpersee/selfhosted-gateway
+
+maintainers:
+  - name: Ryan Persée
+    email: 98691129+rpersee@users.noreply.github.com
