@@ -1,0 +1,162 @@
+---
+- hosts: gateway
+  vars:
+    gateway_username: "{{ ansible_user_id }}"
+    gateway_image: "ghcr.io/rpersee/selfhosted-gateway:latest"
+
+    kube_username: "{{ kube_info['connection']['username'] }}"
+    kube_hostname: "{{ kube_info['connection']['host'] | urlsplit('hostname') }}"
+
+    kube_namespace: "selfhosted-gateway"
+    kube_secret_name: "{{ kube_namespace }}-ssh-key"
+
+  roles:
+    - role: geerlingguy.docker
+      become: true
+
+  tasks:
+    - name: Ensure gateway user belongs to docker group
+      become: true
+      user:
+        name: "{{ gateway_username }}"
+        create_home: true
+        groups: docker
+        append: yes
+      register: gateway_user
+
+    - name: Ensure Docker network exists
+      become: true
+      community.general.docker_network:
+        name: gateway
+        state: present
+
+    - name: Deploy the gateway container
+      become: true
+      community.general.docker_container:
+        name: gateway
+        image: "{{ gateway_image }}"
+        network_mode: "gateway"
+        restart_policy: "unless-stopped"
+        ports:
+          - "80:80"
+          - "443:443"
+        env:
+          NGINX_ENVSUBST_OUTPUT_DIR: "/etc/nginx"
+        state: started
+
+    - name: Get Kubernetes cluster info
+      delegate_to: localhost
+      kubernetes.core.k8s_cluster_info:
+      register: kube_info
+
+    - name: Ensure Kubernetes namespace exists
+      delegate_to: localhost
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ kube_namespace }}"
+
+    - name: Check if the secret exists
+      delegate_to: localhost
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ kube_namespace }}"
+        name: "{{ kube_secret_name }}"
+      register: secret_info
+
+    - when: secret_info.resources | length == 0
+      vars:
+        ssh_keyfile: "/var/tmp/ansible.{{ kube_namespace }}_ssh_key"
+        ssh_privkey: "{{ lookup('file', ssh_keyfile) }}"
+        ssh_pubkey: "{{ lookup('file', ssh_keyfile + '.pub') }}"
+      block:
+        - name: Generate a SSH key pair for the cluster
+          delegate_to: localhost
+          command: ssh-keygen -t ed25519 -f "{{ ssh_keyfile }}" -N "" -C "{{ comment }}"
+          vars:
+            kube_user: "{{ kube_username or lookup('env', 'USER') }}"
+            kube_host: "{{ (kube_hostname == '127.0.0.1') | ternary('localhost', kube_hostname) }}"
+            comment: "{{ kube_user }}@{{ kube_namespace }}.{{ kube_host }}"
+
+        - name: Create a secret from the private key
+          delegate_to: localhost
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                namespace: "{{ kube_namespace }}"
+                name: "{{ kube_secret_name }}"
+              type: Opaque
+              data:
+                private_key: "{{ ssh_privkey | b64encode }}"
+
+        - name: Ensure .ssh directory exists
+          file:
+            path: "{{ gateway_user.home }}/.ssh"
+            state: directory
+            mode: "0700"
+
+        - name: Add the public key to authorized keys
+          lineinfile:
+            path: "{{ gateway_user.home }}/.ssh/authorized_keys"
+            line: "{{ ssh_pubkey }}"
+            create: yes
+
+      rescue:
+        - name: Delete the secret from the cluster
+          delegate_to: localhost
+          kubernetes.core.k8s:
+            state: absent
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                namespace: "{{ kube_namespace }}"
+                name: "{{ kube_secret_name }}"
+
+        - name: Remove the public key from authorized keys
+          lineinfile:
+            path: "{{ gateway_user.home }}/.ssh/authorized_keys"
+            line: "{{ ssh_pubkey }}"
+            state: absent
+
+        - name: Fail the task
+          fail:
+            msg: "Failed to create the SSH key pair secret"
+
+      always:
+        - name: Delete the SSH key pair files
+          delegate_to: localhost
+          file:
+            path: "{{ item }}"
+            state: absent
+          with_items:
+            - "{{ ssh_keyfile }}"
+            - "{{ ssh_keyfile }}.pub"
+
+    - name: Create chart values file
+      delegate_to: localhost
+      copy:
+        dest: "{{ playbook_dir }}/values.yaml"
+        content: |
+          gateway:
+            host: "{{ ansible_host | split('@') | last }}"
+            user: "{{ gateway_username }}"
+
+            sshIdentity:
+              secretName: "{{ kube_secret_name }}"
+              secretKey: "private_key"
+
+          expose:
+            hostFqdn: "<access FQDN>"
+
+            service:
+              namespace: "{{ kube_namespace }}"
+              name: "<service-name>"
+              # port: "80"
